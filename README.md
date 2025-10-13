@@ -6,6 +6,12 @@ It models **single and multiple-queue systems**, evaluates system performance, a
 
 ---
 
+## Table of Contents
+write latter
+
+## Architecture docs
+write latter
+
 ## Objectives
 - Implement queuing systems using SimPy according to **Kendall’s notation**: `A / B / m / K / n / D`.
 - Support multiple queue configurations:
