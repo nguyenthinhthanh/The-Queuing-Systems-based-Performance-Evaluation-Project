@@ -310,8 +310,8 @@ def run_replications(scenario, reps=30):
         sys.run()
         res = sys.results()
         results.append(res)
-        # print all replications result
-        print_results(r, results)
+        # print replications result at time
+        # print_replication_result(r, res)
         print(f"--- End replication: {r}---\n")
 
     # aggregate into dictionaries of lists for metrics
@@ -326,29 +326,28 @@ def run_replications(scenario, reps=30):
     summary = {}
     for k,v in agg.items():
         mean, lo, hi = mean_ci_95(v)
-        summary[k] = {'mean':mean, '95ci':(lo,hi), 'samples':v}
-        # print("\n")
+        summary[k] = {'mean':mean, '95ci':(lo,hi)}
     return summary
 
 # ----------------------
-# Print result repications
+# Print result replications
 # ----------------------
-def print_results(i, results):
-    for res in results:
-        print(f"--- Run {i} ---")
-        print(f"Generated tasks      : {res['generated']}")
-        print(f"Served (CPU done)    : {res['served_cpu']}")
-        print(f"Dropped tasks        : {res['dropped']}")
-        print(f"Avg turnaround time  : {res['avg_turnaround']:.4f}")
-        print(f"CPU utilization      : {res['cpu_util']:.4f}")
-        print(f"I/O utilization      : {res['io_util']:.4f}")
-        print(f"CPU mean service     : {res['cpu_slices_mean']:.4f}")
-        print(f"I/O mean service     : {res['io_slices_mean']:.4f}")
+def print_replication_result(i, res):
+    print(f"--- Run {i} ---")
+    print(f"Generated tasks      : {res['generated']}")
+    print(f"Served (CPU done)    : {res['served_cpu']}")
+    print(f"Dropped tasks        : {res['dropped']}")
+    print(f"Avg turnaround time  : {res['avg_turnaround']:.4f}")
+    print(f"CPU utilization      : {res['cpu_util']:.4f}")
+    print(f"I/O utilization      : {res['io_util']:.4f}")
+    print(f"CPU mean service     : {res['cpu_slices_mean']:.4f}")
+    print(f"I/O mean service     : {res['io_slices_mean']:.4f}")
 
-        # In chi tiết thời gian chờ trung bình theo từng mức ưu tiên
-        print("Avg waiting time per level:")
-        for lvl, avg_w in res['avg_wait_per_level'].items():
-            print(f"   Level {lvl}: {avg_w:.4f}")
+    # In chi tiết thời gian chờ trung bình theo từng mức ưu tiên
+    print("Avg waiting time per level:")
+    for lvl, avg_w in res['avg_wait_per_level'].items():
+        print(f"   Level {lvl}: {avg_w:.4f}")
+        
 
 # ----------------------
 # Example scenarios
@@ -363,7 +362,12 @@ if __name__ == "__main__":
 
     print("Running 10 reps light (demo)...")
     out_light = run_replications(light, reps=10)
-    print(out_light['avg_turnaround'])
+    print("=== Light workload summary ===")
+    for metric, data in out_light.items():
+        mean = data['mean']
+        ci_lo, ci_hi = data['95ci']
+        print(f"{metric:15s} → mean={mean:.4f}, 95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
+
 
     # print("Running 10 reps heavy (demo)...")
     # out_heavy = run_replications(heavy, reps=10)
