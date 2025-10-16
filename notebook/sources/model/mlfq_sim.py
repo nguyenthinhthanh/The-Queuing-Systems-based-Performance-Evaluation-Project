@@ -184,12 +184,15 @@ class MLFQSystem:
         start = self.env.now
         quantum = self.quantums[lvl]
         slice_time = min(task.remaining, quantum)
+        if slice_time < 0:
+            slice_time = 0.0
         # "beginService" bookkeeping
         task.visits += 1
         # we count CPU busy time
         # we'll add to cpu_busy_time when service finishes (to support preemption / partial)
         # do the CPU slice
-        yield self.env.timeout(slice_time)
+        if slice_time > 0:
+            yield self.env.timeout(slice_time)
         elapsed = self.env.now - start
         task.remaining -= elapsed
         self.cpu_busy_time += elapsed
@@ -273,11 +276,11 @@ class MLFQSystem:
     # ---------- results ----------
     def results(self):
         res = {}
-        res['generated'] = self.generated
-        res['served_cpu'] = self.served
-        res['dropped'] = self.dropped
-        res['avg_wait_per_level'] = {lvl: (statistics.mean(ws) if ws else 0.0) for lvl,ws in self.wait_times_per_level.items()}
-        res['avg_turnaround'] = statistics.mean(self.turnaround_times) if self.turnaround_times else 0.0
+        res['generated'] = self.generated   # total of task
+        res['served_cpu'] = self.served     # total of task finished
+        res['dropped'] = self.dropped       # total of task dropped
+        res['avg_wait_per_level'] = {lvl: (statistics.mean(ws) if ws else 0.0) for lvl,ws in self.wait_times_per_level.items()} # Average waiting time for each priority level
+        res['avg_turnaround'] = statistics.mean(self.turnaround_times) if self.turnaround_times else 0.0 # Average turnaround time
         res['cpu_util'] = (self.cpu_busy_time / (self.cpu_cores * self.sim_time)) if self.sim_time>0 else 0.0
         res['io_util'] = (self.io_busy_time / (self.io_servers * self.sim_time)) if self.sim_time>0 else 0.0
         res['cpu_slices_mean'] = statistics.mean(self.cpu_service_times) if self.cpu_service_times else 0.0
@@ -290,6 +293,7 @@ class MLFQSystem:
 def run_replications(scenario, reps=30):
     results = []
     for r in range(reps):
+        print(f"--- Start replication: {r} ---")
         sys = MLFQSystem(
             arrival_rate=scenario['arrival_rate'],
             service_rate=scenario['service_rate'],
@@ -306,6 +310,10 @@ def run_replications(scenario, reps=30):
         sys.run()
         res = sys.results()
         results.append(res)
+        # print all replications result
+        print_results(r, results)
+        print(f"--- End replication: {r}---\n")
+
     # aggregate into dictionaries of lists for metrics
     agg = defaultdict(list)
     for r in results:
@@ -319,7 +327,28 @@ def run_replications(scenario, reps=30):
     for k,v in agg.items():
         mean, lo, hi = mean_ci_95(v)
         summary[k] = {'mean':mean, '95ci':(lo,hi), 'samples':v}
+        # print("\n")
     return summary
+
+# ----------------------
+# Print result repications
+# ----------------------
+def print_results(i, results):
+    for res in results:
+        print(f"--- Run {i} ---")
+        print(f"Generated tasks      : {res['generated']}")
+        print(f"Served (CPU done)    : {res['served_cpu']}")
+        print(f"Dropped tasks        : {res['dropped']}")
+        print(f"Avg turnaround time  : {res['avg_turnaround']:.4f}")
+        print(f"CPU utilization      : {res['cpu_util']:.4f}")
+        print(f"I/O utilization      : {res['io_util']:.4f}")
+        print(f"CPU mean service     : {res['cpu_slices_mean']:.4f}")
+        print(f"I/O mean service     : {res['io_slices_mean']:.4f}")
+
+        # In chi tiết thời gian chờ trung bình theo từng mức ưu tiên
+        print("Avg waiting time per level:")
+        for lvl, avg_w in res['avg_wait_per_level'].items():
+            print(f"   Level {lvl}: {avg_w:.4f}")
 
 # ----------------------
 # Example scenarios
@@ -336,13 +365,13 @@ if __name__ == "__main__":
     out_light = run_replications(light, reps=10)
     print(out_light['avg_turnaround'])
 
-    print("Running 10 reps heavy (demo)...")
-    out_heavy = run_replications(heavy, reps=10)
-    print(out_heavy['avg_turnaround'])
+    # print("Running 10 reps heavy (demo)...")
+    # out_heavy = run_replications(heavy, reps=10)
+    # print(out_heavy['avg_turnaround'])
 
-    # Single full run for inspection and detailed results
-    sys = MLFQSystem(arrival_rate=0.6, service_rate=1.0, cpu_cores=2, io_servers=2,
-                     io_rate=1.0, num_levels=3, quantums=[0.5,1.0,2.0], p_io=0.25,
-                     max_system_size=300, sim_time=5000, seed=42)
-    sys.run()
-    print("Single run metrics:", sys.results())
+    # # Single full run for inspection and detailed results
+    # sys = MLFQSystem(arrival_rate=0.6, service_rate=1.0, cpu_cores=2, io_servers=2,
+    #                  io_rate=1.0, num_levels=3, quantums=[0.5,1.0,2.0], p_io=0.25,
+    #                  max_system_size=300, sim_time=5000, seed=42)
+    # sys.run()
+    # print("Single run metrics:", sys.results())
