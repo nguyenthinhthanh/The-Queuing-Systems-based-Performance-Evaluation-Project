@@ -96,26 +96,20 @@ class MLFQSystem:
                  arrival_rate,          # lambda
                  service_rate,          # mu for CPU total work distribution
                  cpu_cores=1,           # number of CPU cores
-                 io_servers=1,          # number of IO servers
-                 io_rate=1.0,           # mu_io
                  num_levels=3,          # number of feedback levels
                  quantums=None,         # list of quantums per level (time units)
-                 p_io=0.2,              # prob go to IO after finishing CPU burst
                  max_system_size=None,  # K total capacity (including in service + in queues + IO)
                  sim_time=10000,
                  seed=None):
         self.arrival_rate = arrival_rate
         self.service_rate = service_rate
         self.cpu_cores = cpu_cores
-        self.io_servers = io_servers
-        self.io_rate = io_rate
         self.num_levels = num_levels
         if quantums is None:
             # default: level0 small quantum, then double
             self.quantums = [1.0 * (2**i) for i in range(num_levels)]
         else:
             self.quantums = quantums
-        self.p_io = p_io
         self.max_system_size = max_system_size
         self.sim_time = sim_time
         self.seed = seed
@@ -123,9 +117,7 @@ class MLFQSystem:
         # runtime vars
         self.env = None
         self.cpu_store = None     # available core ids
-        self.io_store = None      # available io server ids
         self.ready_queues = [ deque() for _ in range(self.num_levels) ]  # deque per level
-        self.io_queue = deque()
         self.task_counter = 0
 
         # stats
@@ -136,9 +128,7 @@ class MLFQSystem:
         self.wait_times_per_level = defaultdict(list)
         self.turnaround_times = []
         self.cpu_busy_time = 0.0
-        self.io_busy_time = 0.0
         self.cpu_service_times = []
-        self.io_service_times = []
 
         # trace/dup detection
         self.active_tasks = {}  # tid -> Task
@@ -148,9 +138,7 @@ class MLFQSystem:
         """Count tasks in ready queues + cpu busy + io queue + io busy"""
         in_ready = sum(len(q) for q in self.ready_queues)
         cpu_busy = self.cpu_cores - len(self.cpu_store.items) if self.cpu_store is not None else 0
-        in_ioq = len(self.io_queue)
-        io_busy = self.io_servers - len(self.io_store.items) if self.io_store is not None else 0
-        return in_ready + cpu_busy + in_ioq + io_busy
+        return in_ready + cpu_busy
 
     # ---------- initialization ----------
     def init(self):
@@ -161,9 +149,6 @@ class MLFQSystem:
         self.cpu_store = simpy.Store(self.env, capacity=self.cpu_cores)
         for cid in range(self.cpu_cores):
             self.cpu_store.put(cid)
-        self.io_store = simpy.Store(self.env, capacity=self.io_servers)
-        for iid in range(self.io_servers):
-            self.io_store.put(iid)
         # schedule processes
         self.env.process(self.arrival_generator())
         self.env.process(self.dispatcher())        # assign CPU cores to tasks
@@ -257,19 +242,11 @@ class MLFQSystem:
         if task.remaining <= 1e-12:
             # finished CPU work
             self.served += 1
-            # maybe go to IO (simulate CPU <-> IO bursts before task terminates). using p_io
-            if random.random() < self.p_io:
-                # send to IO
-                task.last_enqueue_time = self.env.now
-                self.io_queue.append(task)
-                # spawn io_process if io server available (we spawn always, handler will get server)
-                self.env.process(self._io_process_if_idle())
-            else:
-                # task truly completed (no IO)
-                turnaround = self.env.now - task.arrival_time
-                self.turnaround_times.append(turnaround)
-                self.completed_tasks.append(task)
-                self.active_tasks.pop(task.tid, None)
+            # task truly completed (no IO)
+            turnaround = self.env.now - task.arrival_time
+            self.turnaround_times.append(turnaround)
+            self.completed_tasks.append(task)
+            self.active_tasks.pop(task.tid, None)
             return
         else:
             # not finished -> demote
@@ -278,34 +255,6 @@ class MLFQSystem:
             task.last_enqueue_time = self.env.now
             self.ready_queues[new_lvl].append(task)
             return
-
-    # ---------- IO handler ----------
-    def _io_process_if_idle(self):
-        """If there are tasks in io_queue and io servers free, start a service."""
-        while len(self.io_queue) > 0 and len(self.io_store.items) > 0:
-            task = self.io_queue.popleft()
-            iid = yield self.io_store.get()
-            # spawn actual io process
-            self.env.process(self._io_service(iid, task))
-        # done
-
-    def _io_service(self, iid, task):
-        start = self.env.now
-        # sample io service time
-        io_t = random.expovariate(self.io_rate)
-        yield self.env.timeout(io_t)
-        elapsed = self.env.now - start
-        self.io_busy_time += elapsed
-        self.io_service_times.append(elapsed)
-        # release io server
-        yield self.io_store.put(iid)
-        # after IO, route back to ready queue (we choose to return to level 0)
-        if task.cancelled:
-            self.active_tasks.pop(task.tid, None)
-            return
-        task.level = 0
-        task.last_enqueue_time = self.env.now
-        self.ready_queues[0].append(task)
 
     # ---------- signal: cancel a task (intermediate canceling) ----------
     def cancel_task(self, tid):
@@ -331,9 +280,7 @@ class MLFQSystem:
         res['avg_wait_per_level'] = {lvl: (statistics.mean(ws) if ws else 0.0) for lvl,ws in self.wait_times_per_level.items()} # Average waiting time for each priority level
         res['avg_turnaround'] = statistics.mean(self.turnaround_times) if self.turnaround_times else 0.0 # Average turnaround time
         res['cpu_util'] = (self.cpu_busy_time / (self.cpu_cores * self.sim_time)) if self.sim_time>0 else 0.0
-        res['io_util'] = (self.io_busy_time / (self.io_servers * self.sim_time)) if self.sim_time>0 else 0.0
         res['cpu_slices_mean'] = statistics.mean(self.cpu_service_times) if self.cpu_service_times else 0.0
-        res['io_slices_mean'] = statistics.mean(self.io_service_times) if self.io_service_times else 0.0
         return res
 
 # ----------------------
@@ -347,11 +294,8 @@ def run_replications(scenario, reps=30):
             arrival_rate=scenario['arrival_rate'],
             service_rate=scenario['service_rate'],
             cpu_cores=scenario.get('cpu_cores',1),
-            io_servers=scenario.get('io_servers',1),
-            io_rate=scenario.get('io_rate',1.0),
             num_levels=scenario.get('num_levels',3),
             quantums=scenario.get('quantums', None),
-            p_io=scenario.get('p_io', 0.2),
             max_system_size=scenario.get('max_system_size', None),
             sim_time=scenario.get('sim_time', 10000),
             seed=(scenario.get('seed',None) if scenario.get('seed',None) is None else scenario.get('seed')+r)
@@ -397,9 +341,7 @@ def print_replication_result(i, res):
     print(f"Dropped tasks        : {res['dropped']}")
     print(f"Avg turnaround time  : {res['avg_turnaround']:.4f}")
     print(f"CPU utilization      : {res['cpu_util']:.4f}")
-    print(f"I/O utilization      : {res['io_util']:.4f}")
     print(f"CPU mean service     : {res['cpu_slices_mean']:.4f}")
-    print(f"I/O mean service     : {res['io_slices_mean']:.4f}")
 
     # In chi tiết thời gian chờ trung bình theo từng mức ưu tiên
     print("Avg waiting time per level:")
@@ -412,13 +354,13 @@ def print_replication_result(i, res):
 # ----------------------
 if __name__ == "__main__":
     # Light workload
-    light = {'arrival_rate':0.3, 'service_rate':1.0, 'cpu_cores':2, 'io_servers':1, 'io_rate':0.8,
-             'num_levels':3, 'quantums':[0.5,1.0,2.0], 'p_io':0.3, 'max_system_size':None, 'sim_time':2000, 'seed':1}
+    light = {'arrival_rate':0.3, 'service_rate':1.0, 'cpu_cores':2,
+             'num_levels':3, 'quantums':[0.5,1.0,2.0], 'max_system_size':None, 'sim_time':2000, 'seed':1}
     # Heavy workload (near overload)
-    heavy = {'arrival_rate':1.1, 'service_rate':1.0, 'cpu_cores':2, 'io_servers':1, 'io_rate':0.8,
-             'num_levels':3, 'quantums':[0.5,1.0,2.0], 'p_io':0.3, 'max_system_size':200, 'sim_time':2000, 'seed':10}
+    heavy = {'arrival_rate':1.1, 'service_rate':1.0, 'cpu_cores':2,
+             'num_levels':3, 'quantums':[0.5,1.0,2.0], 'max_system_size':200, 'sim_time':2000, 'seed':10}
 
-    print("Running 10 reps light...")
+    print("Running 10 reps light workload...")
     out_light = run_replications(light, reps=10)
     print("=== Light workload simulation measurement summary ===")
     for metric, data in out_light.items():
@@ -430,7 +372,7 @@ if __name__ == "__main__":
     print("=== Mathematical formula calculation summary ===")
     math_formula_calculation(light)
 
-    # print("Running 10 reps heavy...")
+    # print("Running 10 reps heavy workload...")
     # out_heavy = run_replications(heavy, reps=10)
     # print(out_heavy['avg_turnaround'])
 
