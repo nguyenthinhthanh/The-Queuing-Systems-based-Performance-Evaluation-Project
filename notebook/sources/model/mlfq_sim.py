@@ -25,6 +25,61 @@ def mean_ci_95(data):
     return (mean, mean - z*se, mean + z*se)
 
 # ----------------------
+# Analytical baseline: M/M/m formulas
+# ----------------------
+def mm_m_metrics(arrival_rate, service_rate, m):
+    """Compute analytical M/M/m performance metrics"""
+    rho = arrival_rate / (m * service_rate)
+    if rho >= 1:
+        return None  # unstable
+
+    # P0
+    sum_terms = sum(((m * rho)**k) / math.factorial(k) for k in range(m))
+    p0 = 1.0 / (sum_terms + ((m * rho)**m) / (math.factorial(m) * (1 - rho)))
+
+    # Pw
+    pw = ((m * rho)**m / (math.factorial(m) * (1 - rho))) * p0
+    # Lq, L, Wq, W
+    Lq = (pw * rho) / (1 - rho)
+    L = Lq + (arrival_rate / service_rate)
+    Wq = Lq / arrival_rate
+    W = Wq + 1.0 / service_rate
+
+    return {
+        'rho': rho,
+        'P0': p0,
+        'Pw': pw,
+        'Lq': Lq,
+        'L': L,
+        'Wq': Wq,
+        'W': W
+    }
+
+# ----------------------
+# Compare Simulation vs Analytical
+# ----------------------
+def compare_sim_vs_mm_m(sim_res, scenario):
+    lam = scenario['arrival_rate']
+    mu = scenario['service_rate']
+    m = scenario['cpu_cores']
+    ana = mm_m_metrics(lam, mu, m)
+    if ana is None:
+        print("System unstable (rho >= 1), analytical formulas invalid.")
+        return
+
+    print("\n=== Analytical vs Simulation Comparison ===")
+    print(f"λ={lam:.3f}, μ={mu:.3f}, m={m}")
+    print(f"ρ (CPU Util) theoretical : {ana['rho']:.4f}")
+    print(f"ρ (CPU Util) simulation  : {sim_res['cpu_util']:.4f}")
+    print(f"W (turnaround mean) theo : {ana['W']:.4f}")
+    print(f"W (turnaround mean) sim  : {sim_res['avg_turnaround']:.4f}")
+    print(f"Wq (wait mean) theo      : {ana['Wq']:.4f}")
+    total_wait = sum(sim_res['avg_wait_per_level'].values())
+    print(f"Wq (wait mean) sim (sum) : {total_wait:.4f}")
+    print(f"P(wait) theo             : {ana['Pw']:.4f}")
+
+
+# ----------------------
 # Task object
 # ----------------------
 class Task:
