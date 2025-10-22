@@ -29,30 +29,47 @@ def mean_ci_95(data):
 # ----------------------
 def MMm_metrics(arrival_rate, service_rate, m):
     """Compute analytical M/M/m performance metrics"""
+    # Traffic intensity = Cpu utilization (rh0)
     rho = arrival_rate / (m * service_rate)
     if rho >= 1:
         return None  # unstable
 
-    # P0
+    # Probability of zero job in the system (p0)
     sum_terms = sum(((m * rho)**k) / math.factorial(k) for k in range(m))
     p0 = 1.0 / (sum_terms + ((m * rho)**m) / (math.factorial(m) * (1 - rho)))
 
-    # Pw
+    # Probability that an arriving job must wait for service (Pw)
     pw = ((m * rho)**m / (math.factorial(m) * (1 - rho))) * p0
-    # Lq, L, Wq, W
+
+    # Throughput (λ_eff)
+    lam_eff = arrival_rate
+
+    # Average Service Time (1/μ)
+    service_time = 1.0 / service_rate
+
+    # Average Number of Jobs in Queue (Lq)
     Lq = (pw * rho) / (1 - rho)
+
+    # Average Number of Jobs in System (L)
     L = Lq + (arrival_rate / service_rate)
+
+    # Average Waiting Time in Queue (Wq)
     Wq = Lq / arrival_rate
+
+    # Average Response Time = Average Turnaround Time (W)
+    # because no I/O Blocked 
     W = Wq + 1.0 / service_rate
 
     return {
-        'rho': rho,
+        'rho': rho,                     # Traffic intensity = Cpu utilization (rh0)
         'P0': p0,
         'Pw': pw,
         'Lq': Lq,
         'L': L,
-        'Wq': Wq,
-        'W': W
+        'Wq': Wq,                       # Average Waiting Time in Queue (Wq)
+        'W': W,                         # Average Response Time = Average Turnaround Time (W)
+        'lam_eff': lam_eff,             # Throughput (λ_eff)
+        'service_time': service_time,   # Average service time (1/μ)
     }
 
 # ----------------------
@@ -68,10 +85,11 @@ def math_formula_calculation(scenario):
         return
 
     print(f"λ={lam:.3f}, μ={mu:.3f}, m={m}")
-    print(f"CPU Util theoretical (ρ)         : {analytical['rho']:.4f}")
-    print(f"Turnaround mean theoretical (W)  : {analytical['W']:.4f}")
-    print(f"Wait mean theoretical (Wq)       : {analytical['Wq']:.4f}")
-    print(f"Wait theoretical (P)             : {analytical['Pw']:.4f}")
+    print(f"1. Throughput theoretical (λ_eff)          : {analytical['lam_eff']:.4f}")
+    print(f"2. Average Service time (1/μ)              : {analytical['service_time']:.4f}")
+    print(f"3. CPU Util theoretical (ρ)                : {analytical['rho']:.4f}")
+    print(f"4. Average Turnaround time theoretical (W) : {analytical['W']:.4f}")
+    print(f"5. Average waiting time theoretical (Wq)   : {analytical['Wq']:.4f}")
 
 # ----------------------
 # Task object
@@ -277,10 +295,10 @@ class MLFQSystem:
         res['generated'] = self.generated   # total of task
         res['served_cpu'] = self.served     # total of task finished
         res['dropped'] = self.dropped       # total of task dropped
-        res['avg_wait_per_level'] = {lvl: (statistics.mean(ws) if ws else 0.0) for lvl,ws in self.wait_times_per_level.items()} # Average waiting time for each priority level
+        res['avg_wait_per_job'] = (sum(sum(ws) for ws in self.wait_times_per_level.values()) / self.served) if self.served > 0 else 0.0
         res['avg_turnaround'] = statistics.mean(self.turnaround_times) if self.turnaround_times else 0.0 # Average turnaround time
         res['cpu_util'] = (self.cpu_busy_time / (self.cpu_cores * self.sim_time)) if self.sim_time>0 else 0.0
-        res['cpu_slices_mean'] = statistics.mean(self.cpu_service_times) if self.cpu_service_times else 0.0
+        res['cpu_service_mean'] = (sum(self.cpu_service_times) / self.served) if self.served > 0 else 0.0
         return res
 
 # ----------------------
@@ -314,16 +332,15 @@ def run_replications(scenario, reps=30):
     for r in results:
         agg['generated'].append(r['generated'])
         agg['dropped'].append(r['dropped'])
+
+        lam_eff = r['served_cpu'] / scenario['sim_time']
+        agg['throughput'].append(lam_eff)
+        
+        agg['cpu_service_mean'].append(r['cpu_service_mean'])
         agg['cpu_util'].append(r['cpu_util'])
         agg['avg_turnaround'].append(r['avg_turnaround'])
+        agg['avg_wait_per_job'].append(r['avg_wait_per_job'])
         
-        sum_wait = 0.0
-        for lvl, w in r['avg_wait_per_level'].items():
-            sum_wait += w
-        agg['avg_wait_per_level_sum'].append(sum_wait)
-
-        agg['served_cpu'].append(r['served_cpu'])
-        agg['cpu_slices_mean'].append(r['cpu_slices_mean'])
     # compute mean & 95% CI
     summary = {}
     for k,v in agg.items():
@@ -360,21 +377,33 @@ if __name__ == "__main__":
     heavy = {'arrival_rate':1.1, 'service_rate':1.0, 'cpu_cores':2,
              'num_levels':3, 'quantums':[0.5,1.0,2.0], 'max_system_size':200, 'sim_time':2000, 'seed':10}
 
+    ######### Light workload #########
     print("Running 10 reps light workload...")
     out_light = run_replications(light, reps=10)
     print("=== Light workload simulation measurement summary ===")
-    for metric, data in out_light.items():
+    for i, (metric, data) in enumerate(out_light.items(), start=-1):
+        if metric in ["generated", "dropped"]:
+            continue
         mean = data['mean']
         ci_lo, ci_hi = data['95ci']
-        print(f"{metric:25s}        : mean={mean:.4f},95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
-    print("\n")
+        print(f"{i}. {metric:30s}: mean={mean:.4f}, 95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
 
     print("=== Mathematical formula calculation summary ===")
     math_formula_calculation(light)
+    print("\n")
 
+    ######### Heavy workload #########
     # print("Running 10 reps heavy workload...")
     # out_heavy = run_replications(heavy, reps=10)
-    # print(out_heavy['avg_turnaround'])
+    # print("=== Heavy workload simulation measurement summary ===")
+    # for metric, data in out_heavy.items():
+    #     mean = data['mean']
+    #     ci_lo, ci_hi = data['95ci']
+    #     print(f"{metric:25s}        : mean={mean:.4f},95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
+
+    # print("=== Mathematical formula calculation summary ===")
+    # math_formula_calculation(heavy)
+    # print("\n")
 
     # # Single full run for inspection and detailed results
     # sys = MLFQSystem(arrival_rate=0.6, service_rate=1.0, cpu_cores=2, io_servers=2,
