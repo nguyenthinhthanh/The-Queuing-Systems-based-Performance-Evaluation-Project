@@ -78,7 +78,6 @@ def compare_sim_vs_mm_m(sim_res, scenario):
     print(f"Wq (wait mean) sim (sum) : {total_wait:.4f}")
     print(f"P(wait) theo             : {ana['Pw']:.4f}")
 
-
 # ----------------------
 # Task object
 # ----------------------
@@ -373,10 +372,17 @@ def run_replications(scenario, reps=30):
     agg = defaultdict(list)
     for r in results:
         agg['generated'].append(r['generated'])
-        agg['served_cpu'].append(r['served_cpu'])
         agg['dropped'].append(r['dropped'])
-        agg['avg_turnaround'].append(r['avg_turnaround'])
         agg['cpu_util'].append(r['cpu_util'])
+        agg['avg_turnaround'].append(r['avg_turnaround'])
+        
+        sum_wait = 0.0
+        for lvl, w in r['avg_wait_per_level'].items():
+            sum_wait += w
+        agg['avg_wait_per_level_sum'].append(sum_wait)
+
+        agg['served_cpu'].append(r['served_cpu'])
+        agg['cpu_slices_mean'].append(r['cpu_slices_mean'])
     # compute mean & 95% CI
     summary = {}
     for k,v in agg.items():
