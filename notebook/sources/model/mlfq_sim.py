@@ -27,7 +27,7 @@ def mean_ci_95(data):
 # ----------------------
 # Analytical baseline: M/M/m formulas
 # ----------------------
-def mm_m_metrics(arrival_rate, service_rate, m):
+def MMm_metrics(arrival_rate, service_rate, m):
     """Compute analytical M/M/m performance metrics"""
     rho = arrival_rate / (m * service_rate)
     if rho >= 1:
@@ -58,25 +58,20 @@ def mm_m_metrics(arrival_rate, service_rate, m):
 # ----------------------
 # Compare Simulation vs Analytical
 # ----------------------
-def compare_sim_vs_mm_m(sim_res, scenario):
+def math_formula_calculation(scenario):
     lam = scenario['arrival_rate']
     mu = scenario['service_rate']
     m = scenario['cpu_cores']
-    ana = mm_m_metrics(lam, mu, m)
-    if ana is None:
+    analytical = MMm_metrics(lam, mu, m)
+    if analytical is None:
         print("System unstable (rho >= 1), analytical formulas invalid.")
         return
 
-    print("\n=== Analytical vs Simulation Comparison ===")
     print(f"λ={lam:.3f}, μ={mu:.3f}, m={m}")
-    print(f"ρ (CPU Util) theoretical : {ana['rho']:.4f}")
-    print(f"ρ (CPU Util) simulation  : {sim_res['cpu_util']:.4f}")
-    print(f"W (turnaround mean) theo : {ana['W']:.4f}")
-    print(f"W (turnaround mean) sim  : {sim_res['avg_turnaround']:.4f}")
-    print(f"Wq (wait mean) theo      : {ana['Wq']:.4f}")
-    total_wait = sum(sim_res['avg_wait_per_level'].values())
-    print(f"Wq (wait mean) sim (sum) : {total_wait:.4f}")
-    print(f"P(wait) theo             : {ana['Pw']:.4f}")
+    print(f"CPU Util theoretical (ρ)         : {analytical['rho']:.4f}")
+    print(f"Turnaround mean theoretical (W)  : {analytical['W']:.4f}")
+    print(f"Wait mean theoretical (Wq)       : {analytical['Wq']:.4f}")
+    print(f"Wait theoretical (P)             : {analytical['Pw']:.4f}")
 
 # ----------------------
 # Task object
@@ -366,7 +361,9 @@ def run_replications(scenario, reps=30):
         results.append(res)
         # print replications result at time
         # print_replication_result(r, res)
-        print(f"--- End replication: {r}---\n")
+        # print(f"--- End replication: {r}---\n")
+
+    print("\n")
 
     # aggregate into dictionaries of lists for metrics
     agg = defaultdict(list)
@@ -421,16 +418,19 @@ if __name__ == "__main__":
     heavy = {'arrival_rate':1.1, 'service_rate':1.0, 'cpu_cores':2, 'io_servers':1, 'io_rate':0.8,
              'num_levels':3, 'quantums':[0.5,1.0,2.0], 'p_io':0.3, 'max_system_size':200, 'sim_time':2000, 'seed':10}
 
-    print("Running 10 reps light (demo)...")
+    print("Running 10 reps light...")
     out_light = run_replications(light, reps=10)
-    print("=== Light workload summary ===")
+    print("=== Light workload simulation measurement summary ===")
     for metric, data in out_light.items():
         mean = data['mean']
         ci_lo, ci_hi = data['95ci']
-        print(f"{metric:15s} → mean={mean:.4f}, 95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
+        print(f"{metric:25s}        : mean={mean:.4f},95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
+    print("\n")
 
+    print("=== Mathematical formula calculation summary ===")
+    math_formula_calculation(light)
 
-    # print("Running 10 reps heavy (demo)...")
+    # print("Running 10 reps heavy...")
     # out_heavy = run_replications(heavy, reps=10)
     # print(out_heavy['avg_turnaround'])
 
