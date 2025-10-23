@@ -8,6 +8,12 @@ import statistics
 import math
 from collections import deque, defaultdict, namedtuple
 
+# Queue simulation mode
+SINGLE_QUEUE_MODE = 0
+NETWORK_QUEUE_MODE = 1
+
+QUEUE_SIMULATION_MODE = SINGLE_QUEUE_MODE
+
 # ----------------------
 # Helper: Confidence Interval (95%)
 # ----------------------
@@ -302,6 +308,71 @@ class MLFQSystem:
         return res
     
 # ----------------------
+# Runner for replications & workloads
+# ----------------------
+def run_replications(scenario, reps=30):
+    results = []
+    for r in range(reps):
+        print(f"--- Start replication: {r} ---")
+        sys = MLFQSystem(
+            arrival_rate=scenario['arrival_rate'],
+            service_rate=scenario['service_rate'],
+            cpu_cores=scenario.get('cpu_cores',1),
+            num_levels=scenario.get('num_levels',3),
+            quantums=scenario.get('quantums', None),
+            max_system_size=scenario.get('max_system_size', None),
+            sim_time=scenario.get('sim_time', 10000),
+            seed=(scenario.get('seed',None) if scenario.get('seed',None) is None else scenario.get('seed')+r)
+        )
+        sys.run()
+        res = sys.results()
+        results.append(res)
+        # print replications result at time
+        # print_replication_result(r, res)
+        # print(f"--- End replication: {r}---\n")
+
+    print()
+
+    # aggregate into dictionaries of lists for metrics
+    agg = defaultdict(list)
+    for r in results:
+        agg['generated'].append(r['generated'])
+        agg['dropped'].append(r['dropped'])
+
+        lam_eff = r['served_cpu'] / scenario['sim_time']
+        agg['throughput'].append(lam_eff)
+        
+        agg['cpu_service_mean'].append(r['cpu_service_mean'])
+        agg['cpu_util'].append(r['cpu_util'])
+        agg['avg_turnaround'].append(r['avg_turnaround'])
+        agg['avg_wait_per_job'].append(r['avg_wait_per_job'])
+        
+    # compute mean & 95% CI
+    summary = {}
+    for k,v in agg.items():
+        mean, lo, hi = mean_ci_95(v)
+        summary[k] = {'mean':mean, '95ci':(lo,hi)}
+    return summary
+
+# ----------------------
+# Print result replications
+# ----------------------
+def print_replication_result(i, res):
+    print(f"--- Run {i} ---")
+    print(f"Generated tasks      : {res['generated']}")
+    print(f"Served (CPU done)    : {res['served_cpu']}")
+    print(f"Dropped tasks        : {res['dropped']}")
+    print(f"Avg turnaround time  : {res['avg_turnaround']:.4f}")
+    print(f"CPU utilization      : {res['cpu_util']:.4f}")
+    print(f"CPU mean service     : {res['cpu_slices_mean']:.4f}")
+
+    # In chi tiết thời gian chờ trung bình theo từng mức ưu tiên
+    print("Avg waiting time per level:")
+    for lvl, avg_w in res['avg_wait_per_level'].items():
+        print(f"   Level {lvl}: {avg_w:.4f}")
+        
+
+# ----------------------
 # Network Simulator
 # ----------------------
 class NetworkSimulator:
@@ -429,112 +500,54 @@ def run_network_scenario(scenario, reps=10):
     return {'module_agg': agg, 'summaries': summaries, 'overall': overall}
 
 # ----------------------
-# Runner for replications & workloads
-# ----------------------
-def run_replications(scenario, reps=30):
-    results = []
-    for r in range(reps):
-        print(f"--- Start replication: {r} ---")
-        sys = MLFQSystem(
-            arrival_rate=scenario['arrival_rate'],
-            service_rate=scenario['service_rate'],
-            cpu_cores=scenario.get('cpu_cores',1),
-            num_levels=scenario.get('num_levels',3),
-            quantums=scenario.get('quantums', None),
-            max_system_size=scenario.get('max_system_size', None),
-            sim_time=scenario.get('sim_time', 10000),
-            seed=(scenario.get('seed',None) if scenario.get('seed',None) is None else scenario.get('seed')+r)
-        )
-        sys.run()
-        res = sys.results()
-        results.append(res)
-        # print replications result at time
-        # print_replication_result(r, res)
-        # print(f"--- End replication: {r}---\n")
-
-    print("\n")
-
-    # aggregate into dictionaries of lists for metrics
-    agg = defaultdict(list)
-    for r in results:
-        agg['generated'].append(r['generated'])
-        agg['dropped'].append(r['dropped'])
-
-        lam_eff = r['served_cpu'] / scenario['sim_time']
-        agg['throughput'].append(lam_eff)
-        
-        agg['cpu_service_mean'].append(r['cpu_service_mean'])
-        agg['cpu_util'].append(r['cpu_util'])
-        agg['avg_turnaround'].append(r['avg_turnaround'])
-        agg['avg_wait_per_job'].append(r['avg_wait_per_job'])
-        
-    # compute mean & 95% CI
-    summary = {}
-    for k,v in agg.items():
-        mean, lo, hi = mean_ci_95(v)
-        summary[k] = {'mean':mean, '95ci':(lo,hi)}
-    return summary
-
-# ----------------------
-# Print result replications
-# ----------------------
-def print_replication_result(i, res):
-    print(f"--- Run {i} ---")
-    print(f"Generated tasks      : {res['generated']}")
-    print(f"Served (CPU done)    : {res['served_cpu']}")
-    print(f"Dropped tasks        : {res['dropped']}")
-    print(f"Avg turnaround time  : {res['avg_turnaround']:.4f}")
-    print(f"CPU utilization      : {res['cpu_util']:.4f}")
-    print(f"CPU mean service     : {res['cpu_slices_mean']:.4f}")
-
-    # In chi tiết thời gian chờ trung bình theo từng mức ưu tiên
-    print("Avg waiting time per level:")
-    for lvl, avg_w in res['avg_wait_per_level'].items():
-        print(f"   Level {lvl}: {avg_w:.4f}")
-        
-
-# ----------------------
 # Example scenarios
 # ----------------------
 if __name__ == "__main__":
-    # Light workload
-    light = {'arrival_rate':0.3, 'service_rate':1.0, 'cpu_cores':2,
-             'num_levels':3, 'quantums':[0.5,1.0,2.0], 'max_system_size':None, 'sim_time':2000, 'seed':1}
-    # Heavy workload (near overload)
-    heavy = {'arrival_rate':1.1, 'service_rate':1.0, 'cpu_cores':2,
-             'num_levels':3, 'quantums':[0.5,1.0,2.0], 'max_system_size':200, 'sim_time':2000, 'seed':10}
+    if QUEUE_SIMULATION_MODE == SINGLE_QUEUE_MODE:
+        print(f"Running single queue simulation mode........\n")
+        # Light workload
+        light = {'arrival_rate':0.3, 'service_rate':1.0, 'cpu_cores':2,
+                'num_levels':3, 'quantums':[0.5,1.0,2.0], 'max_system_size':None, 'sim_time':2000, 'seed':1}
+        # Heavy workload (near overload)
+        heavy = {'arrival_rate':1.1, 'service_rate':1.0, 'cpu_cores':2,
+                'num_levels':3, 'quantums':[0.5,1.0,2.0], 'max_system_size':200, 'sim_time':2000, 'seed':10}
 
-    ######### Light workload #########
-    print("Running 10 reps light workload...")
-    out_light = run_replications(light, reps=10)
-    print("=== Light workload simulation measurement summary ===")
-    for i, (metric, data) in enumerate(out_light.items(), start=-1):
-        if metric in ["generated", "dropped"]:
-            continue
-        mean = data['mean']
-        ci_lo, ci_hi = data['95ci']
-        print(f"{i}. {metric:30s}: mean={mean:.4f}, 95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
+        ######### Light workload #########
+        print("Running 10 reps light workload...")
+        out_light = run_replications(light, reps=10)
+        print("=== Light workload simulation measurement summary ===")
+        for i, (metric, data) in enumerate(out_light.items(), start=-1):
+            if metric in ["generated", "dropped"]:
+                continue
+            mean = data['mean']
+            ci_lo, ci_hi = data['95ci']
+            print(f"{i}. {metric:30s}: mean={mean:.4f}, 95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
 
-    print("=== Mathematical formula calculation summary ===")
-    math_formula_calculation(light)
-    print("\n")
+        print("=== Mathematical formula calculation summary ===")
+        math_formula_calculation(light)
+        print("\n")
 
-    ######### Heavy workload #########
-    # print("Running 10 reps heavy workload...")
-    # out_heavy = run_replications(heavy, reps=10)
-    # print("=== Heavy workload simulation measurement summary ===")
-    # for metric, data in out_heavy.items():
-    #     mean = data['mean']
-    #     ci_lo, ci_hi = data['95ci']
-    #     print(f"{metric:25s}        : mean={mean:.4f},95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
+        ######### Heavy workload #########
+        # print("Running 10 reps heavy workload...")
+        # out_heavy = run_replications(heavy, reps=10)
+        # print("=== Heavy workload simulation measurement summary ===")
+        # for metric, data in out_heavy.items():
+        #     mean = data['mean']
+        #     ci_lo, ci_hi = data['95ci']
+        #     print(f"{metric:25s}        : mean={mean:.4f},95% CI=({ci_lo:.4f}, {ci_hi:.4f})")
 
-    # print("=== Mathematical formula calculation summary ===")
-    # math_formula_calculation(heavy)
-    # print("\n")
+        # print("=== Mathematical formula calculation summary ===")
+        # math_formula_calculation(heavy)
+        # print("\n")
 
-    # # Single full run for inspection and detailed results
-    # sys = MLFQSystem(arrival_rate=0.6, service_rate=1.0, cpu_cores=2, io_servers=2,
-    #                  io_rate=1.0, num_levels=3, quantums=[0.5,1.0,2.0], p_io=0.25,
-    #                  max_system_size=300, sim_time=5000, seed=42)
-    # sys.run()
-    # print("Single run metrics:", sys.results())
+        # # Single full run for inspection and detailed results
+        # sys = MLFQSystem(arrival_rate=0.6, service_rate=1.0, cpu_cores=2, io_servers=2,
+        #                  io_rate=1.0, num_levels=3, quantums=[0.5,1.0,2.0], p_io=0.25,
+        #                  max_system_size=300, sim_time=5000, seed=42)
+        # sys.run()
+        # print("Single run metrics:", sys.results())
+    elif QUEUE_SIMULATION_MODE == NETWORK_QUEUE_MODE:
+        print(f"Running network queue simulation mode........\n")
+        pass
+    else:
+        print(f"Error: Invalid QUEUE_MODE '{QUEUE_SIMULATION_MODE}'.")
