@@ -300,6 +300,133 @@ class MLFQSystem:
         res['cpu_util'] = (self.cpu_busy_time / (self.cpu_cores * self.sim_time)) if self.sim_time>0 else 0.0
         res['cpu_service_mean'] = (sum(self.cpu_service_times) / self.served) if self.served > 0 else 0.0
         return res
+    
+# ----------------------
+# Network Simulator
+# ----------------------
+class NetworkSimulator:
+    def __init__(self, sim_time=10000, seed=None):
+        self.env = simpy.Environment()
+        self.modules = {}   # name -> ModuleMLFQ
+        self.routing = {}   # name -> list of (next_name, prob) ; next_name None = exit
+        self.sim_time = sim_time
+        self.seed = seed
+        self.global_task_counter = 0
+        self.completed_tasks = []   # tasks that exit network
+        self.external_generators = {}  # module_name -> arrival_rate for independent arrivals
+
+    def add_module(self, name, cpu_cores, service_rate, num_levels=3, quantums=None, max_size=None, seed=None):
+        mod = MLFQSystem(name, self.env, cpu_cores, service_rate, num_levels, quantums, max_size, seed)
+        mod.router = self
+        self.modules[name] = mod
+        return mod
+
+    def set_routing(self, from_name, routing_list):
+        """
+        routing_list: list of (to_name_or_None, prob)
+        sum(prob) should be <= 1; remainder => exit (None)
+        Example: [('Render',0.5), ('Sound',0.2)] means 50%->Render,20%->Sound, 30%->exit
+        """
+        self.routing[from_name] = routing_list
+
+    def add_external_arrival(self, module_name, arrival_rate):
+        """Add an independent Poisson external arrival stream to a module."""
+        self.external_generators[module_name] = arrival_rate
+        # schedule generator
+        self.env.process(self._external_arrivals(module_name, arrival_rate))
+
+    def _external_arrivals(self, module_name, arrival_rate):
+        while self.env.now < self.sim_time:
+            inter = random.expovariate(arrival_rate)
+            yield self.env.timeout(inter)
+            self.global_task_counter += 1
+            t = Task(self.global_task_counter, self.env.now)
+            accepted = self.modules[module_name].accept_task(t)
+            if not accepted:
+                # dropped at module on arrival
+                pass
+
+    def route_on_completion(self, task, from_module):
+        """Called by module when it finishes local service. Decide next hop."""
+        rlist = self.routing.get(from_module, [])
+        # compute cumulative distribution
+        rnd = random.random()
+        cum = 0.0
+        for to_name, prob in rlist:
+            cum += prob
+            if rnd < cum:
+                # route to to_name (if None means exit)
+                if to_name is None:
+                    # exit system
+                    self.completed_tasks.append((task, self.env.now))
+                else:
+                    # send to module
+                    self.modules[to_name].accept_task(task)
+                return
+        # if not returned, exit system
+        self.completed_tasks.append((task, self.env.now))
+
+# ----------------------
+# Runner to perform replications and comparisons
+# ----------------------
+def run_network_scenario(scenario, reps=10):
+    """
+    scenario is dict with:
+      - sim_time
+      - modules: dict name -> {cpu_cores, service_rate, num_levels, quantums, max_size, ext_arrival_rate}
+      - routing: dict from_name -> [(to_name, prob), ...]
+    """
+    summaries = []
+    for r in range(reps):
+        sim = NetworkSimulator(sim_time=scenario.get('sim_time',10000), seed=(scenario.get('seed',None) + r) if scenario.get('seed',None) is not None else None)
+        # add modules
+        for name, cfg in scenario['modules'].items():
+            sim.add_module(name,
+                           cpu_cores=cfg.get('cpu_cores',1),
+                           service_rate=cfg.get('service_rate',1.0),
+                           num_levels=cfg.get('num_levels',3),
+                           quantums=cfg.get('quantums', None),
+                           max_size=cfg.get('max_size', None),
+                           seed=cfg.get('seed',None))
+            # external arrivals if present
+            if cfg.get('ext_arrival_rate', None) is not None:
+                sim.add_external_arrival(name, cfg['ext_arrival_rate'])
+        # set routing
+        for frm, rlist in scenario.get('routing', {}).items():
+            sim.set_routing(frm, rlist)
+        # run sim
+        sim.run()
+        res = sim.gather_results()
+        summaries.append(res)
+    # aggregate per-module numeric stats across reps
+    agg = {}
+    module_names = list(scenario['modules'].keys())
+    for name in module_names:
+        arrs = []
+        served = []
+        util = []
+        avg_wait0 = []  # sum over levels
+        avg_service = []
+        for s in summaries:
+            mm = s['modules'][name]
+            arrs.append(mm['arrivals'] if 'arrivals' in mm else mm.get('arrivals',0))
+            served.append(mm['served'])
+            util.append(mm['util'])
+            avg_wait0.append(sum(mm['avg_wait_per_level'].values()) if mm['avg_wait_per_level'] else 0.0)
+            avg_service.append(mm['avg_service'])
+        agg[name] = {
+            'arrivals_mean': statistics.mean(arrs),
+            'served_mean': statistics.mean(served),
+            'util_mean': statistics.mean(util),
+            'avg_wait_mean': statistics.mean(avg_wait0),
+            'avg_service_mean': statistics.mean(avg_service),
+            'arrivals_samples': arrs
+        }
+    # overall end-to-end aggregated
+    completed = [s['overall']['completed'] for s in summaries]
+    avg_e2e = [s['overall']['avg_end2end'] for s in summaries]
+    overall = {'completed_mean': statistics.mean(completed), 'avg_e2e_mean': statistics.mean(avg_e2e)}
+    return {'module_agg': agg, 'summaries': summaries, 'overall': overall}
 
 # ----------------------
 # Runner for replications & workloads
