@@ -548,6 +548,30 @@ if __name__ == "__main__":
         # print("Single run metrics:", sys.results())
     elif QUEUE_SIMULATION_MODE == NETWORK_QUEUE_MODE:
         print(f"Running network queue simulation mode........\n")
-        pass
+        # Network queue sub-module simulation
+        # Define scenario with 3 modules: Render, AI, Sound
+        scenario = {
+            'sim_time': 2000,
+            'seed': 123,
+            'modules': {
+                'Render': {'cpu_cores':2, 'service_rate':1.0, 'num_levels':3, 'quantums':[0.5,1.0,2.0], 'ext_arrival_rate':0.3},
+                'AI':     {'cpu_cores':1, 'service_rate':0.8, 'num_levels':2, 'quantums':[0.5,1.0], 'ext_arrival_rate':0.1},
+                'Sound':  {'cpu_cores':1, 'service_rate':1.2, 'num_levels':2, 'quantums':[0.5,1.0], 'ext_arrival_rate':0.05},
+            },
+            # Routing: after finishing in a module, it routes to the next with given prob
+            # Format: from_module: [(to_module_or_None, prob), ...]
+            # remainder probability means exit
+            'routing': {
+                'Render': [('AI', 0.1), ('Sound', 0.05)],  # 10% -> AI, 5% -> Sound, else exit
+                'AI': [('Render', 0.2)],                   # 20% -> Render, else exit
+                'Sound': []                                # no explicit routes => exit
+            }
+        }
+
+        out = run_network_scenario(scenario, reps=5)
+        print("\n=== Aggregated module results (means over reps) ===")
+        for name, mm in out['module_agg'].items():
+            print(f"Module {name}: arrivals_mean={mm['arrivals_mean']:.2f}, served_mean={mm['served_mean']:.2f}, util_mean={mm['util_mean']:.3f}, avg_wait_mean={mm['avg_wait_mean']:.3f}")
+        print("\nOverall completed tasks mean:", out['overall']['completed_mean'], "avg end-to-end mean:", out['overall']['avg_e2e_mean'])
     else:
         print(f"Error: Invalid QUEUE_MODE '{QUEUE_SIMULATION_MODE}'.")
