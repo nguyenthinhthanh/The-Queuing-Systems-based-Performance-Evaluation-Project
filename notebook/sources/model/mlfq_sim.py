@@ -12,7 +12,7 @@ from collections import deque, defaultdict, namedtuple
 SINGLE_QUEUE_MODE = 0
 NETWORK_QUEUE_MODE = 1
 # Defaut simulations mode
-QUEUE_SIMULATION_MODE = SINGLE_QUEUE_MODE
+QUEUE_SIMULATION_MODE = NETWORK_QUEUE_MODE
 
 # ----------------------
 # Helper: Confidence Interval (95%)
@@ -117,6 +117,8 @@ class Task:
 # ----------------------
 class MLFQSystem:
     def __init__(self,
+                 name,                  # module name
+                 env,                   # share env from netword
                  arrival_rate,          # lambda
                  service_rate,          # mu for CPU total work distribution
                  cpu_cores=1,           # number of CPU cores
@@ -125,6 +127,12 @@ class MLFQSystem:
                  max_system_size=None,  # K total capacity (including in service + in queues + IO)
                  sim_time=10000,
                  seed=None):
+        """
+        name: module id
+        env: shared simpy.Environment
+        """
+        self.name = name
+        self.env = env
         self.arrival_rate = arrival_rate
         self.service_rate = service_rate
         self.cpu_cores = cpu_cores
@@ -137,6 +145,10 @@ class MLFQSystem:
         self.max_system_size = max_system_size
         self.sim_time = sim_time
         self.seed = seed
+
+        # keep reference to network router will be set later
+        # should be set by NetworkSimulator
+        self.router = None
 
         # runtime vars
         self.env = None
@@ -166,9 +178,6 @@ class MLFQSystem:
 
     # ---------- initialization ----------
     def init(self):
-        if self.seed is not None:
-            random.seed(self.seed)
-        self.env = simpy.Environment()
         # available CPU cores / IO servers
         self.cpu_store = simpy.Store(self.env, capacity=self.cpu_cores)
         for cid in range(self.cpu_cores):
@@ -189,6 +198,7 @@ class MLFQSystem:
     def _handle_arrival(self):
         t = self.env.now
         self.task_counter += 1
+        self.router.global_task_counter += 1
         tid = self.task_counter
         # sample total service requirement (Exp with mean 1/mu)
         total_service = random.expovariate(self.service_rate)
@@ -293,7 +303,6 @@ class MLFQSystem:
     def run(self):
         if self.env is None:
             self.init()
-        self.env.run(until=self.sim_time)
 
     # ---------- results ----------
     def results(self):
@@ -364,13 +373,7 @@ def print_replication_result(i, res):
     print(f"Dropped tasks        : {res['dropped']}")
     print(f"Avg turnaround time  : {res['avg_turnaround']:.4f}")
     print(f"CPU utilization      : {res['cpu_util']:.4f}")
-    print(f"CPU mean service     : {res['cpu_slices_mean']:.4f}")
-
-    # In chi tiết thời gian chờ trung bình theo từng mức ưu tiên
-    print("Avg waiting time per level:")
-    for lvl, avg_w in res['avg_wait_per_level'].items():
-        print(f"   Level {lvl}: {avg_w:.4f}")
-        
+    print(f"CPU mean service     : {res['cpu_service_mean']:.4f}")
 
 # ----------------------
 # Network Simulator
@@ -386,8 +389,8 @@ class NetworkSimulator:
         self.completed_tasks = []   # tasks that exit network
         self.external_generators = {}  # module_name -> arrival_rate for independent arrivals
 
-    def add_module(self, name, cpu_cores, service_rate, num_levels=3, quantums=None, max_size=None, seed=None):
-        mod = MLFQSystem(name, self.env, cpu_cores, service_rate, num_levels, quantums, max_size, seed)
+    def add_module(self, name, arrival_rate, service_rate, cpu_cores, num_levels=3, quantums=None, max_size=None, sim_time = 10000, seed=None):
+        mod = MLFQSystem(name, self.env, arrival_rate, service_rate, cpu_cores, num_levels, quantums, max_size, sim_time, seed)
         mod.router = self
         self.modules[name] = mod
         return mod
@@ -403,19 +406,6 @@ class NetworkSimulator:
     def add_external_arrival(self, module_name, arrival_rate):
         """Add an independent Poisson external arrival stream to a module."""
         self.external_generators[module_name] = arrival_rate
-        # schedule generator
-        self.env.process(self._external_arrivals(module_name, arrival_rate))
-
-    def _external_arrivals(self, module_name, arrival_rate):
-        while self.env.now < self.sim_time:
-            inter = random.expovariate(arrival_rate)
-            yield self.env.timeout(inter)
-            self.global_task_counter += 1
-            t = Task(self.global_task_counter, self.env.now)
-            accepted = self.modules[module_name].accept_task(t)
-            if not accepted:
-                # dropped at module on arrival
-                pass
 
     def route_on_completion(self, task, from_module):
         """Called by module when it finishes local service. Decide next hop."""
@@ -440,6 +430,12 @@ class NetworkSimulator:
     def run(self):
         if self.seed is not None:
             random.seed(self.seed)
+        
+        # initialize each module so they register their processes on the shared env
+        for name, mod in self.modules.items():
+            if hasattr(mod, 'run'):
+                mod.run()
+
         self.env.run(until=self.sim_time)
 
     def gather_results(self):
@@ -474,11 +470,13 @@ def run_network_scenario(scenario, reps=10):
         # add modules
         for name, cfg in scenario['modules'].items():
             sim.add_module(name,
-                           cpu_cores=cfg.get('cpu_cores',1),
+                           arrival_rate=cfg.get('ext_arrival_rate'),
                            service_rate=cfg.get('service_rate',1.0),
+                           cpu_cores=cfg.get('cpu_cores',1),
                            num_levels=cfg.get('num_levels',3),
                            quantums=cfg.get('quantums', None),
                            max_size=cfg.get('max_size', None),
+                           sim_time=scenario.get('sim_time',10000),
                            seed=cfg.get('seed',None))
             # external arrivals if present
             if cfg.get('ext_arrival_rate', None) is not None:
