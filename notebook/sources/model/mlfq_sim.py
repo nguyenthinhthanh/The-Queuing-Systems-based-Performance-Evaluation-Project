@@ -11,7 +11,7 @@ from collections import deque, defaultdict, namedtuple
 # Queue simulation mode
 SINGLE_QUEUE_MODE = 0
 NETWORK_QUEUE_MODE = 1
-
+# Defaut simulations mode
 QUEUE_SIMULATION_MODE = SINGLE_QUEUE_MODE
 
 # ----------------------
@@ -436,6 +436,27 @@ class NetworkSimulator:
                 return
         # if not returned, exit system
         self.completed_tasks.append((task, self.env.now))
+
+    def run(self):
+        if self.seed is not None:
+            random.seed(self.seed)
+        self.env.run(until=self.sim_time)
+
+    def gather_results(self):
+        # per-module metrics
+        mod_metrics = {}
+        for name, m in self.modules.items():
+            mod_metrics[name] = m.metrics_snapshot(self.sim_time)
+        # end-to-end
+        completed = len(self.completed_tasks)
+        end_to_end_times = [(t.env_time - t.gen_time) if False else (exit_time - task.gen_time) for task, exit_time in self.completed_tasks]
+        # above line uses exit_time - gen_time
+        et_times = [exit_time - task.gen_time for task, exit_time in self.completed_tasks]
+        overall = {
+            'completed': completed,
+            'avg_end2end': statistics.mean(et_times) if et_times else 0.0
+        }
+        return {'modules': mod_metrics, 'overall': overall, 'completed_list': self.completed_tasks}
 
 # ----------------------
 # Runner to perform replications and comparisons
