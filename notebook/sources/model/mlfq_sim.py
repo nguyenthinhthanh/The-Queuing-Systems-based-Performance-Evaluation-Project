@@ -440,9 +440,9 @@ class NetworkSimulator:
 
     def gather_results(self):
         # per-module metrics
-        mod_metrics = {}
+        mod_result = {}
         for name, m in self.modules.items():
-            mod_metrics[name] = m.metrics_snapshot(self.sim_time)
+            mod_result[name] = m.results()
         # end-to-end
         completed = len(self.completed_tasks)
         end_to_end_times = [(t.env_time - t.gen_time) if False else (exit_time - task.gen_time) for task, exit_time in self.completed_tasks]
@@ -452,7 +452,7 @@ class NetworkSimulator:
             'completed': completed,
             'avg_end2end': statistics.mean(et_times) if et_times else 0.0
         }
-        return {'modules': mod_metrics, 'overall': overall, 'completed_list': self.completed_tasks}
+        return {'modules': mod_result, 'overall': overall, 'completed_list': self.completed_tasks}
 
 # ----------------------
 # Runner to perform replications and comparisons
@@ -466,6 +466,7 @@ def run_network_scenario(scenario, reps=10):
     """
     summaries = []
     for r in range(reps):
+        print(f"--- Start replication: {r} ---")
         sim = NetworkSimulator(sim_time=scenario.get('sim_time',10000), seed=(scenario.get('seed',None) + r) if scenario.get('seed',None) is not None else None)
         # add modules
         for name, cfg in scenario['modules'].items():
@@ -488,29 +489,37 @@ def run_network_scenario(scenario, reps=10):
         sim.run()
         res = sim.gather_results()
         summaries.append(res)
+    print()
     # aggregate per-module numeric stats across reps
     agg = {}
     module_names = list(scenario['modules'].keys())
     for name in module_names:
-        arrs = []
-        served = []
-        util = []
-        avg_wait0 = []  # sum over levels
-        avg_service = []
+        generated = []
+        dropped = []
+        throughput = []
+        cpu_service_mean = []
+        cpu_util = []
+        avg_turnaround = []
+        avg_wait_per_job = []
         for s in summaries:
             mm = s['modules'][name]
-            arrs.append(mm['arrivals'] if 'arrivals' in mm else mm.get('arrivals',0))
-            served.append(mm['served'])
-            util.append(mm['util'])
-            avg_wait0.append(sum(mm['avg_wait_per_level'].values()) if mm['avg_wait_per_level'] else 0.0)
-            avg_service.append(mm['avg_service'])
+
+            generated.append(mm['generated'])
+            dropped.append(mm['dropped'])
+            lam_eff = mm['served_cpu'] / scenario['sim_time']
+            throughput.append(lam_eff)
+            cpu_service_mean.append(mm['cpu_service_mean'])
+            cpu_util.append(mm['cpu_util']),
+            avg_turnaround.append(mm['avg_turnaround']),
+            avg_wait_per_job.append(mm['avg_wait_per_job'])
         agg[name] = {
-            'arrivals_mean': statistics.mean(arrs),
-            'served_mean': statistics.mean(served),
-            'util_mean': statistics.mean(util),
-            'avg_wait_mean': statistics.mean(avg_wait0),
-            'avg_service_mean': statistics.mean(avg_service),
-            'arrivals_samples': arrs
+            'generated': statistics.mean(generated),
+            'dropped': statistics.mean(dropped),
+            'throughput': statistics.mean(throughput),
+            'cpu_service_mean': statistics.mean(cpu_service_mean),
+            'cpu_util': statistics.mean(cpu_util),
+            'avg_turnaround': statistics.mean(avg_turnaround),
+            'avg_wait_per_job': statistics.mean(avg_wait_per_job)
         }
     # overall end-to-end aggregated
     completed = [s['overall']['completed'] for s in summaries]
@@ -587,7 +596,10 @@ if __name__ == "__main__":
             }
         }
 
+        ######### Light workload #########
+        print("Running 5 reps light workload...")
         out = run_network_scenario(scenario, reps=5)
+        print("=== Light workload simulation measurement summary ===")
         print("\n=== Aggregated module results (means over reps) ===")
         for name, mm in out['module_agg'].items():
             print(f"Module {name}: arrivals_mean={mm['arrivals_mean']:.2f}, served_mean={mm['served_mean']:.2f}, util_mean={mm['util_mean']:.3f}, avg_wait_mean={mm['avg_wait_mean']:.3f}")
