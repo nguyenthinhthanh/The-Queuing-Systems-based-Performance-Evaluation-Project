@@ -60,6 +60,8 @@ def MMm_metrics(arrival_rate, service_rate, m):
     L = Lq + (arrival_rate / service_rate)
 
     # Average Waiting Time in Queue (Wq)
+    print(f"Check Lq: {Lq}")
+    print(f"Check arrival_rate: {arrival_rate}")
     Wq = Lq / arrival_rate
 
     # Average Response Time = Average Turnaround Time (W)
@@ -151,7 +153,6 @@ class MLFQSystem:
         self.router = None
 
         # runtime vars
-        self.env = None
         self.cpu_store = None     # available core ids
         self.ready_queues = [ deque() for _ in range(self.num_levels) ]  # deque per level
         self.task_counter = 0
@@ -301,7 +302,7 @@ class MLFQSystem:
 
     # ---------- run ----------
     def run(self):
-        if self.env is None:
+        if self.env is not None:
             self.init()
 
     # ---------- results ----------
@@ -512,20 +513,48 @@ def run_network_scenario(scenario, reps=10):
             cpu_util.append(mm['cpu_util']),
             avg_turnaround.append(mm['avg_turnaround']),
             avg_wait_per_job.append(mm['avg_wait_per_job'])
+
+        # helper to compute mean + 95% CI via mean_ci_95 and format missing data
+        def statistics_95(samples):
+            mean, lo, hi = mean_ci_95(samples)
+            return {'mean': mean, '95ci': (lo, hi)}
+
         agg[name] = {
-            'generated': statistics.mean(generated),
-            'dropped': statistics.mean(dropped),
-            'throughput': statistics.mean(throughput),
-            'cpu_service_mean': statistics.mean(cpu_service_mean),
-            'cpu_util': statistics.mean(cpu_util),
-            'avg_turnaround': statistics.mean(avg_turnaround),
-            'avg_wait_per_job': statistics.mean(avg_wait_per_job)
+            'generated': statistics_95(generated),
+            'dropped': statistics_95(dropped),
+            'throughput': statistics_95(throughput),
+            'cpu_service_mean': statistics_95(cpu_service_mean),
+            'cpu_util': statistics_95(cpu_util),
+            'avg_turnaround': statistics_95(avg_turnaround),
+            'avg_wait_per_job': statistics_95(avg_wait_per_job)
         }
     # overall end-to-end aggregated
     completed = [s['overall']['completed'] for s in summaries]
     avg_e2e = [s['overall']['avg_end2end'] for s in summaries]
     overall = {'completed_mean': statistics.mean(completed), 'avg_e2e_mean': statistics.mean(avg_e2e)}
     return {'module_agg': agg, 'summaries': summaries, 'overall': overall}
+
+# ----------------------
+# Extract scenarios
+# ----------------------
+def extract_all_modules(scenario):
+    """
+    Extract the entire module from the scenario.
+    """
+    modules = {}
+    for name, cfg in scenario.get('modules', {}).items():
+        workload = {
+            'arrival_rate': cfg.get('ext_arrival_rate', 0.0),
+            'service_rate': cfg['service_rate'],
+            'cpu_cores': cfg.get('cpu_cores', 1),
+            'num_levels': cfg.get('num_levels', 3),
+            'quantums': cfg.get('quantums', None),
+            'max_system_size': cfg.get('max_size', None),
+            'sim_time': scenario.get('sim_time', cfg.get('sim_time', 10000)),
+            'seed': scenario.get('seed', cfg.get('seed', None))
+        }
+        modules[name] = workload
+    return modules
 
 # ----------------------
 # Example scenarios
@@ -583,8 +612,8 @@ if __name__ == "__main__":
             'seed': 123,
             'modules': {
                 'Render': {'cpu_cores':2, 'service_rate':1.0, 'num_levels':3, 'quantums':[0.5,1.0,2.0], 'ext_arrival_rate':0.3},
-                'AI':     {'cpu_cores':1, 'service_rate':0.8, 'num_levels':2, 'quantums':[0.5,1.0], 'ext_arrival_rate':0.1},
-                'Sound':  {'cpu_cores':1, 'service_rate':1.2, 'num_levels':2, 'quantums':[0.5,1.0], 'ext_arrival_rate':0.05},
+                'AI':     {'cpu_cores':2, 'service_rate':0.8, 'num_levels':2, 'quantums':[0.5,1.0], 'ext_arrival_rate':0.1},
+                'Sound':  {'cpu_cores':2, 'service_rate':0.9, 'num_levels':2, 'quantums':[0.5,1.0], 'ext_arrival_rate':0.4},
             },
             # Routing: after finishing in a module, it routes to the next with given prob
             # Format: from_module: [(to_module_or_None, prob), ...]
@@ -600,9 +629,48 @@ if __name__ == "__main__":
         print("Running 5 reps light workload...")
         out = run_network_scenario(scenario, reps=5)
         print("=== Light workload simulation measurement summary ===")
-        print("\n=== Aggregated module results (means over reps) ===")
+        # Thay thế block in hiện tại bằng đoạn này
         for name, mm in out['module_agg'].items():
-            print(f"Module {name}: arrivals_mean={mm['arrivals_mean']:.2f}, served_mean={mm['served_mean']:.2f}, util_mean={mm['util_mean']:.3f}, avg_wait_mean={mm['avg_wait_mean']:.3f}")
-        print("\nOverall completed tasks mean:", out['overall']['completed_mean'], "avg end-to-end mean:", out['overall']['avg_e2e_mean'])
+            def fmt(stat, fmt_mean="{:.2f}", fmt_ci="({:.2f}, {:.2f})"):
+                if stat is None:
+                    return "N/A"
+                mean = stat.get('mean', None)
+                ci = stat.get('95ci', (None, None))
+                lo, hi = ci if ci is not None else (None, None)
+                if mean is None:
+                    return "N/A"
+                try:
+                    mean_s = fmt_mean.format(mean)
+                except Exception:
+                    mean_s = str(mean)
+                
+                if lo is None or hi is None:
+                    return f"{mean_s}"
+                try:
+                    ci_s = fmt_ci.format(lo, hi)
+                except Exception:
+                    ci_s = f"({lo}, {hi})"
+                return f"{mean_s} ± {ci_s}"
+
+            print(f"{name}:")
+            print(f"Total task (mean ± 95%CI)                  : {fmt(mm.get('generated'), '{:.2f}', '({:.2f}, {:.2f})')}")
+            print(f"Total task dropped (mean ± 95%CI)          : {fmt(mm.get('dropped'), '{:.2f}', '({:.2f}, {:.2f})')}")
+            print(f"1. Throughput (mean ± 95%CI)               : {fmt(mm.get('throughput'), '{:.4f}', '({:.4f}, {:.4f})')}")
+            print(f"2. Average Service time (mean ± 95%CI)     : {fmt(mm.get('cpu_service_mean'), '{:.3f}', '({:.3f}, {:.3f})')}")
+            print(f"3. CPU Util (mean ± 95%CI)                 : {fmt(mm.get('cpu_util'), '{:.4f}', '({:.4f}, {:.4f})')}")
+            print(f"4. Average Turnaround time (mean ± 95%CI)  : {fmt(mm.get('avg_turnaround'), '{:.4f}', '({:.4f}, {:.4f})')}")
+            print(f"5. Average waiting time (mean ± 95%CI)     : {fmt(mm.get('avg_wait_per_job'), '{:.4f}', '({:.4f}, {:.4f})')}")
+            print()
+
+        print("--> Overall completed tasks mean:", out['overall']['completed_mean'], "avg end-to-end mean:", out['overall']['avg_e2e_mean'])
+        print()
+
+        print("=== Mathematical formula calculation summary ===")
+        modules = extract_all_modules(scenario)
+
+        for name, mod in modules.items():
+            print(f"{name}:")
+            math_formula_calculation(mod)
+            print()
     else:
         print(f"Error: Invalid QUEUE_MODE '{QUEUE_SIMULATION_MODE}'.")
