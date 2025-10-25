@@ -60,8 +60,6 @@ def MMm_metrics(arrival_rate, service_rate, m):
     L = Lq + (arrival_rate / service_rate)
 
     # Average Waiting Time in Queue (Wq)
-    print(f"Check Lq: {Lq}")
-    print(f"Check arrival_rate: {arrival_rate}")
     Wq = Lq / arrival_rate
 
     # Average Response Time = Average Turnaround Time (W)
@@ -194,9 +192,9 @@ class MLFQSystem:
         while self.env.now < self.sim_time:
             inter = random.expovariate(self.arrival_rate)
             yield self.env.timeout(inter)
-            self._handle_arrival()
+            self.handle_arrival()
 
-    def _handle_arrival(self):
+    def handle_arrival(self):
         t = self.env.now
         self.task_counter += 1
         self.router.global_task_counter += 1
@@ -282,6 +280,9 @@ class MLFQSystem:
             self.turnaround_times.append(turnaround)
             self.completed_tasks.append(task)
             self.active_tasks.pop(task.tid, None)
+
+            if self.router is not None:
+                self.router.route_on_completion(task, from_module=self.name)
             return
         else:
             # not finished -> demote
@@ -423,7 +424,7 @@ class NetworkSimulator:
                     self.completed_tasks.append((task, self.env.now))
                 else:
                     # send to module
-                    self.modules[to_name].accept_task(task)
+                    self.modules[to_name].handle_arrival()
                 return
         # if not returned, exit system
         self.completed_tasks.append((task, self.env.now))
@@ -446,9 +447,9 @@ class NetworkSimulator:
             mod_result[name] = m.results()
         # end-to-end
         completed = len(self.completed_tasks)
-        end_to_end_times = [(t.env_time - t.gen_time) if False else (exit_time - task.gen_time) for task, exit_time in self.completed_tasks]
+        end_to_end_times = [(t.env_time - t.arrival_time) if False else (exit_time - task.arrival_time) for task, exit_time in self.completed_tasks]
         # above line uses exit_time - gen_time
-        et_times = [exit_time - task.gen_time for task, exit_time in self.completed_tasks]
+        et_times = [exit_time - task.arrival_time for task, exit_time in self.completed_tasks]
         overall = {
             'completed': completed,
             'avg_end2end': statistics.mean(et_times) if et_times else 0.0
@@ -609,7 +610,7 @@ if __name__ == "__main__":
         # Define scenario with 3 modules: Render, AI, Sound
         scenario = {
             'sim_time': 2000,
-            'seed': 123,
+            'seed': 259,
             'modules': {
                 'Render': {'cpu_cores':2, 'service_rate':1.0, 'num_levels':3, 'quantums':[0.5,1.0,2.0], 'ext_arrival_rate':0.3},
                 'AI':     {'cpu_cores':2, 'service_rate':0.8, 'num_levels':2, 'quantums':[0.5,1.0], 'ext_arrival_rate':0.1},
