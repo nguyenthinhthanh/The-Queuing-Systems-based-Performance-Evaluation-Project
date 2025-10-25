@@ -6,6 +6,7 @@ import simpy
 import random
 import statistics
 import math
+import numpy as np
 from collections import deque, defaultdict, namedtuple
 
 # Queue simulation mode
@@ -497,6 +498,32 @@ def extract_all_modules(scenario):
         }
         modules[name] = workload
     return modules
+
+def _build_routing_matrix_T(scenario):
+    """
+    Build P^T matrix representation as dict-of-dicts where P_T[i][j] = prob from j -> i.
+    Returns (names, P_col, gamma_list)
+    """
+    names = list(scenario['modules'].keys())
+    n = len(names)
+    name_to_idx = {name:i for i,name in enumerate(names)}
+    # gamma (external arrivals)
+    gamma = [scenario['modules'][name].get('ext_arrival_rate', 0.0) or 0.0 for name in names]
+    # P^T columns: P_col[i] is dict mapping from-column j -> prob from j->i
+    P_col = [defaultdict(float) for _ in range(n)]
+    routing = scenario.get('routing', {})
+    for j, from_name in enumerate(names):
+        for to_name, prob in routing.get(from_name, []):
+            if to_name is None:
+                continue
+            if to_name not in name_to_idx:
+                # ignore unknown destination
+                continue
+            i = name_to_idx[to_name]
+            P_col[i][j] += prob
+    return names, P_col, gamma
+
+
 
 # ----------------------
 # Example scenarios
