@@ -499,6 +499,9 @@ def extract_all_modules(scenario):
         modules[name] = workload
     return modules
 
+# ----------------------
+# Helper build matrix P^T
+# ----------------------
 def _build_routing_matrix_T(scenario):
     """
     Build P^T matrix representation as dict-of-dicts where P_T[i][j] = prob from j -> i.
@@ -523,7 +526,101 @@ def _build_routing_matrix_T(scenario):
             P_col[i][j] += prob
     return names, P_col, gamma
 
+# ----------------------
+# Effective arrivals rate
+# ----------------------
+def compute_effective_arrivals(scenario, tol=1e-12, max_iter=10000):
+    """
+    Compute lambda_eff per module.
+    Uses numpy solver if available, otherwise uses fixed-point iteration.
+    Returns dict: {module_name: lambda_eff}
+    """
+    names, P_col, gamma = _build_routing_matrix_T(scenario)
+    n = len(names)
+    Gamma_total = sum(gamma)
+    # Try numpy solve
+    A = np.zeros((n,n), dtype=float)
+    for i in range(n):
+        for j in range(n):
+            # P_col[i] gives probs from j->i
+            A[i,j] = P_col[i].get(j, 0.0)
+    # A currently is P^T; we need (I - P^T) * lam = gamma
+    IminusP = np.eye(n) - A
+    try:
+        lam = np.linalg.solve(IminusP, np.array(gamma, dtype=float))
+    except np.linalg.LinAlgError:
+        raise RuntimeError("Analytical solver: (I - P^T) singular; routing may never exit.")
+    return {names[i]: float(lam[i]) for i in range(n)}
 
+# ----------------------
+# Queue network analytical
+# ----------------------
+def network_analytical_summary(scenario):
+    """
+    Compute analytical (Jackson/M/M/c) metrics for each module and an overall end-to-end W_net.
+    Prints nicely and returns a dict of results.
+    """
+    # extract gamma total to compute network-level W via Little
+    names = list(scenario['modules'].keys())
+    gamma = {name: scenario['modules'][name].get('ext_arrival_rate', 0.0) or 0.0 for name in names}
+    Gamma_total = sum(gamma.values())
+    if Gamma_total <= 0:
+        print("Warning: total external arrival rate is zero. Nothing to analyze.")
+        return {}
+
+    # 1) compute effective lambdas
+    lam_eff = compute_effective_arrivals(scenario)
+
+    # 2) compute per-module M/M/c metrics using mmc_metrics
+    per_module = {}
+    L_total = 0.0
+    for name in names:
+        lam = lam_eff.get(name, 0.0)
+        cfg = scenario['modules'][name]
+        mu = cfg['service_rate']
+        c = cfg['cpu_cores']
+        metrics = MMm_metrics(lam, mu, c)
+        if metrics is None:
+            per_module[name] = {'lambda': lam, 'unstable': True}
+            print(f"Module {name}: Analytical unstable (rho >= 1) with λ={lam:.6f}, μ={mu}, m={c}")
+            continue
+        per_module[name] = {'lambda': lam, **metrics}
+        L_total += metrics['L']
+
+    # 3) network end-to-end via Little: W_net = L_total / Gamma_total
+    W_net = L_total / Gamma_total if Gamma_total>0 else None
+
+    # 4) print nicely
+    for name in names:
+        info = per_module.get(name)
+        if info is None:
+            print(f"{name}: no data")
+            continue
+        if info.get('unstable', False):
+            print(f"{name}: unstable analytical (rho >= 1). λ_eff={info['lambda']:.6f}")
+            continue
+        lam = info['lam_eff']
+        mu = info['service_time'] and (1.0 / info['service_time']) or scenario['modules'][name]['service_rate']
+        m = scenario['modules'][name]['cpu_cores']
+        print(f"\n{name}:")
+        print(f"λ={lam:.3f}, μ={mu:.3f}, m={m}")
+        print(f"1. Throughput theoretical (λ_eff)          : {info['lam_eff']:.4f}")
+        print(f"2. Average Service time (1/μ)              : {info['service_time']:.4f}")
+        print(f"3. CPU Util theoretical (ρ)                : {info['rho']:.4f}")
+        print(f"4. Average Turnaround time theoretical (W) : {info['W']:.4f}")
+        print(f"5. Average waiting time theoretical (Wq)   : {info['Wq']:.4f}")
+        print(f"6. Average number in system (L)            : {info['L']:.4f}")
+        print(f"7. Average number in queue (Lq)            : {info['Lq']:.4f}")
+
+    print("\n=== Analytical end-to-end ===")
+    print(f"Total external arrival rate (Γ) = {Gamma_total:.6f}")
+    print(f"Sum L_i (expected jobs in network) = {L_total:.6f}")
+    if W_net is not None:
+        print(f"Analytical average end-to-end response time W_net = L_total / Γ = {W_net:.6f} time units")
+    else:
+        print("Cannot compute W_net (Gamma_total=0).")
+
+    return {'per_module': per_module, 'L_total': L_total, 'Gamma_total': Gamma_total, 'W_net': W_net}
 
 # ----------------------
 # Example scenarios
@@ -590,9 +687,14 @@ if __name__ == "__main__":
     print()
 
     print("=== Mathematical formula calculation summary ===")
-    modules = extract_all_modules(scenario)
+    # modules = extract_all_modules(scenario)
 
-    for name, mod in modules.items():
-        print(f"{name}:")
-        math_formula_calculation(mod)
-        print()
+    # for name, mod in modules.items():
+    #     print(f"{name}:")
+    #     math_formula_calculation(mod)
+    #     print()
+    anal = network_analytical_summary(scenario)
+
+
+
+
