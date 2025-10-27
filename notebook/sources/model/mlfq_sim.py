@@ -80,25 +80,6 @@ def MMm_metrics(arrival_rate, service_rate, m):
     }
 
 # ----------------------
-# Compare Simulation vs Analytical
-# ----------------------
-def math_formula_calculation(scenario):
-    lam = scenario['arrival_rate']
-    mu = scenario['service_rate']
-    m = scenario['cpu_cores']
-    analytical = MMm_metrics(lam, mu, m)
-    if analytical is None:
-        print("System unstable (rho >= 1), analytical formulas invalid.")
-        return
-
-    print(f"λ={lam:.3f}, μ={mu:.3f}, m={m}")
-    print(f"1. Throughput theoretical (λ_eff)          : {analytical['lam_eff']:.4f}")
-    print(f"2. Average Service time (1/μ)              : {analytical['service_time']:.4f}")
-    print(f"3. CPU Util theoretical (ρ)                : {analytical['rho']:.4f}")
-    print(f"4. Average Turnaround time theoretical (W) : {analytical['W']:.4f}")
-    print(f"5. Average waiting time theoretical (Wq)   : {analytical['Wq']:.4f}")
-
-# ----------------------
 # Task object
 # ----------------------
 class Task:
@@ -317,6 +298,16 @@ class MLFQSystem:
         res['avg_turnaround'] = statistics.mean(self.turnaround_times) if self.turnaround_times else 0.0 # Average turnaround time
         res['cpu_util'] = (self.cpu_busy_time / (self.cpu_cores * self.sim_time)) if self.sim_time>0 else 0.0
         res['cpu_service_mean'] = (sum(self.cpu_service_times) / self.served) if self.served > 0 else 0.0
+
+        # --- Little/sample-based Lq estimator (Lq)---
+        lam_hat = (self.served / self.sim_time) if self.sim_time > 0 else 0.0   # measured throughput
+        Wq_hat = res['avg_wait_per_job']                                        # measured avg waiting time per job
+        res['avg_number_in_queue'] = lam_hat * Wq_hat
+
+        # --- System-level Little estimator (L) ---
+        mu = (self.service_rate) if self.service_rate > 0 else 0.0
+        res['avg_number_in_system'] = res['avg_number_in_queue'] + (lam_hat / mu if mu > 0 else 0.0)
+
         return res
 
 # ----------------------
@@ -445,6 +436,8 @@ def run_network_scenario(scenario, reps=10):
         cpu_util = []
         avg_turnaround = []
         avg_wait_per_job = []
+        avg_number_in_system = []
+        avg_number_in_queue = []
         for s in summaries:
             mm = s['modules'][name]
 
@@ -456,6 +449,8 @@ def run_network_scenario(scenario, reps=10):
             cpu_util.append(mm['cpu_util']),
             avg_turnaround.append(mm['avg_turnaround']),
             avg_wait_per_job.append(mm['avg_wait_per_job'])
+            avg_number_in_queue.append(mm['avg_number_in_queue'])
+            avg_number_in_system.append(mm['avg_number_in_system'])
 
         # helper to compute mean + 95% CI via mean_ci_95 and format missing data
         def statistics_95(samples):
@@ -469,7 +464,9 @@ def run_network_scenario(scenario, reps=10):
             'cpu_service_mean': statistics_95(cpu_service_mean),
             'cpu_util': statistics_95(cpu_util),
             'avg_turnaround': statistics_95(avg_turnaround),
-            'avg_wait_per_job': statistics_95(avg_wait_per_job)
+            'avg_wait_per_job': statistics_95(avg_wait_per_job),
+            'avg_number_in_queue': statistics_95(avg_number_in_queue),
+            'avg_number_in_system': statistics_95(avg_number_in_system)
         }
     # overall end-to-end aggregated
     completed = [s['overall']['completed'] for s in summaries]
@@ -609,14 +606,14 @@ def network_analytical_summary(scenario):
         print(f"3. CPU Util theoretical (ρ)                : {info['rho']:.4f}")
         print(f"4. Average Turnaround time theoretical (W) : {info['W']:.4f}")
         print(f"5. Average waiting time theoretical (Wq)   : {info['Wq']:.4f}")
-        print(f"6. Average number in system (L)            : {info['L']:.4f}")
-        print(f"7. Average number in queue (Lq)            : {info['Lq']:.4f}")
+        print(f"6. Average number in queue (Lq)            : {info['Lq']:.4f}")
+        print(f"7. Average number in system (L)            : {info['L']:.4f}")
 
-    print("\n=== Analytical end-to-end ===")
-    print(f"Total external arrival rate (Γ) = {Gamma_total:.6f}")
-    print(f"Sum L_i (expected jobs in network) = {L_total:.6f}")
+    print("\nQueue network:")
+    print(f"1. Total external arrival rate (Γ) = {Gamma_total:.6f}")
+    print(f"2. Sum L_i (expected jobs in network) = {L_total:.6f}")
     if W_net is not None:
-        print(f"Analytical average end-to-end response time W_net = L_total / Γ = {W_net:.6f} time units")
+        print(f"3. Analytical average end-to-end response time W_net = L_total / Γ = {W_net:.6f} time units")
     else:
         print("Cannot compute W_net (Gamma_total=0).")
 
@@ -626,6 +623,7 @@ def network_analytical_summary(scenario):
 # Example scenarios
 # ----------------------
 if __name__ == "__main__":
+    ######### Simulations #########
     print(f"Running network queue simulation mode........\n")
     # Network queue sub-module simulation
     # Define scenario with 3 modules: Render, AI, Sound
@@ -681,18 +679,15 @@ if __name__ == "__main__":
         print(f"3. CPU Util (mean ± 95%CI)                 : {fmt(mm.get('cpu_util'), '{:.4f}', '({:.4f}, {:.4f})')}")
         print(f"4. Average Turnaround time (mean ± 95%CI)  : {fmt(mm.get('avg_turnaround'), '{:.4f}', '({:.4f}, {:.4f})')}")
         print(f"5. Average waiting time (mean ± 95%CI)     : {fmt(mm.get('avg_wait_per_job'), '{:.4f}', '({:.4f}, {:.4f})')}")
+        print(f"6. Average number in queue (mean ± 95%CI)  : {fmt(mm.get('avg_number_in_queue'), '{:.4f}', '({:.4f}, {:.4f})')}")
+        print(f"7. Average number in system (mean ± 95%CI) : {fmt(mm.get('avg_number_in_system'), '{:.4f}', '({:.4f}, {:.4f})')}")
         print()
 
     print("--> Overall completed tasks mean:", out['overall']['completed_mean'], "avg end-to-end mean:", out['overall']['avg_e2e_mean'])
     print()
 
-    print("=== Mathematical formula calculation summary ===")
-    # modules = extract_all_modules(scenario)
-
-    # for name, mod in modules.items():
-    #     print(f"{name}:")
-    #     math_formula_calculation(mod)
-    #     print()
+    ######### Analytical #########
+    print("=== Mathematical formula analytical calculation summary ===")
     anal = network_analytical_summary(scenario)
 
 
