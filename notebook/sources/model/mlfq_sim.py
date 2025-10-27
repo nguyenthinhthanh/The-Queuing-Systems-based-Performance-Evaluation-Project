@@ -383,9 +383,14 @@ class NetworkSimulator:
         end_to_end_times = [(t.env_time - t.arrival_time) if False else (exit_time - task.arrival_time) for task, exit_time in self.completed_tasks]
         # above line uses exit_time - gen_time
         et_times = [exit_time - task.arrival_time for task, exit_time in self.completed_tasks]
+        avg_number_in_system_net = sum(
+            mod_result[name].get('avg_number_in_system', 0.0) for name in mod_result
+        )
         overall = {
             'completed': completed,
-            'avg_end2end': statistics.mean(et_times) if et_times else 0.0
+            'avg_number_in_system_net': avg_number_in_system_net,
+            'arrival_rate_net': completed / self.sim_time if self.sim_time > 0 else 0.0,
+            'avg_end2end': sum(et_times) / completed if completed > 0 else 0.0
         }
         return {'modules': mod_result, 'overall': overall, 'completed_list': self.completed_tasks}
 
@@ -470,8 +475,10 @@ def run_network_scenario(scenario, reps=10):
         }
     # overall end-to-end aggregated
     completed = [s['overall']['completed'] for s in summaries]
+    arrival_rate_net = [s['overall']['arrival_rate_net'] for s in summaries]
+    avg_number_in_system_net = [s['overall']['avg_number_in_system_net'] for s in summaries]
     avg_e2e = [s['overall']['avg_end2end'] for s in summaries]
-    overall = {'completed_mean': statistics.mean(completed), 'avg_e2e_mean': statistics.mean(avg_e2e)}
+    overall = {'arrival_rate_net': statistics_95(arrival_rate_net), 'avg_number_in_system_net': statistics_95(avg_number_in_system_net), 'avg_e2e_mean': statistics_95(avg_e2e)}
     return {'module_agg': agg, 'summaries': summaries, 'overall': overall}
 
 # ----------------------
@@ -609,11 +616,11 @@ def network_analytical_summary(scenario):
         print(f"6. Average number in queue (Lq)            : {info['Lq']:.4f}")
         print(f"7. Average number in system (L)            : {info['L']:.4f}")
 
-    print("\nQueue network:")
-    print(f"1. Total external arrival rate (Γ) = {Gamma_total:.6f}")
-    print(f"2. Sum L_i (expected jobs in network) = {L_total:.6f}")
+    print("\nGame engine network:")
+    print(f"1. Total external arrival rate (Γ)          : {Gamma_total:.6f}")
+    print(f"2. Total expected jobs in network (L)       : {L_total:.6f}")
     if W_net is not None:
-        print(f"3. Analytical average end-to-end response time W_net = L_total / Γ = {W_net:.6f} time units")
+        print(f"3. Average end-to-end response time (W)     : {W_net:.6f}")
     else:
         print("Cannot compute W_net (Gamma_total=0).")
 
@@ -683,7 +690,10 @@ if __name__ == "__main__":
         print(f"7. Average number in system (mean ± 95%CI) : {fmt(mm.get('avg_number_in_system'), '{:.4f}', '({:.4f}, {:.4f})')}")
         print()
 
-    print("--> Overall completed tasks mean:", out['overall']['completed_mean'], "avg end-to-end mean:", out['overall']['avg_e2e_mean'])
+    print("Game engine network:")
+    print(f"1. Total external arrival rate (mean ± 95%CI)   : {fmt(out['overall']['arrival_rate_net'], '{:.4f}', '({:.4f}, {:.4f})')}")
+    print(f"2. Total expected jobs in network (mean ± 95%CI)   : {fmt(out['overall']['avg_number_in_system_net'], '{:.4f}', '({:.4f}, {:.4f})')}")
+    print(f"3. Average end-to-end response time (mean ± 95%CI)   : {fmt(out['overall']['avg_e2e_mean'], '{:.4f}', '({:.4f}, {:.4f})')}")
     print()
 
     ######### Analytical #########
