@@ -691,9 +691,9 @@ if __name__ == "__main__":
         print()
 
     print("Game engine network:")
-    print(f"1. Total external arrival rate (mean ± 95%CI)   : {fmt(out['overall']['arrival_rate_net'], '{:.4f}', '({:.4f}, {:.4f})')}")
-    print(f"2. Total expected jobs in network (mean ± 95%CI)   : {fmt(out['overall']['avg_number_in_system_net'], '{:.4f}', '({:.4f}, {:.4f})')}")
-    print(f"3. Average end-to-end response time (mean ± 95%CI)   : {fmt(out['overall']['avg_e2e_mean'], '{:.4f}', '({:.4f}, {:.4f})')}")
+    print(f"1. Total external arrival rate (mean ± 95%CI)       : {fmt(out['overall']['arrival_rate_net'], '{:.4f}', '({:.4f}, {:.4f})')}")
+    print(f"2. Total expected jobs in network (mean ± 95%CI)    : {fmt(out['overall']['avg_number_in_system_net'], '{:.4f}', '({:.4f}, {:.4f})')}")
+    print(f"3. Average end-to-end response time (mean ± 95%CI)  : {fmt(out['overall']['avg_e2e_mean'], '{:.4f}', '({:.4f}, {:.4f})')}")
     print()
 
     ######### Analytical #########
